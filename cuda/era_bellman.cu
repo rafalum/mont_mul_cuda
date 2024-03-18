@@ -1,7 +1,22 @@
 #include "era_bellman.h"
+#include <inttypes.h>
 
 #define CUDA_CHECK(call) if((errorState=call)!=0) { cudaError("Call \"" #call "\" failed.", __FILE__, __LINE__); return errorState; }
 
+void print_device_properties(){
+  cudaDeviceProp properties;
+  cudaGetDeviceProperties(&properties, 0);
+
+  printf("SM count: %d\n", properties.multiProcessorCount);
+  printf("Max blocks per SM: %d\n", properties.maxBlocksPerMultiProcessor);
+  printf("Max threads per block: %d\n", properties.maxThreadsPerBlock);
+  printf("Max threads per SM: %d\n", properties.maxThreadsPerMultiProcessor);
+  printf("Max shared memory per block: %zu\n", properties.sharedMemPerBlock);
+  printf("Max shared memory per SM: %zu\n", properties.sharedMemPerMultiprocessor);
+  printf("Max registers per block: %d\n", properties.regsPerBlock);
+  printf("Max registers per SM: %d\n", properties.regsPerMultiprocessor);
+  printf("Max threads per warp: %d\n", properties.warpSize);
+}
 
 static __device__ __forceinline__ void mul_n(uint32_t *acc, const uint32_t *a, uint32_t bi, size_t n = TLC) { 
 #pragma unroll
@@ -53,10 +68,18 @@ static DEVICE_INLINE void mad_n_redc(uint32_t *even, uint32_t *odd, const uint32
   }
 
 
-__global__ void montmul_raw_kernel(const storage &a_in, const storage &b_in, storage &r_in) {
+__global__ void montmul_raw_kernel(const storage *points, storage *results) {
     constexpr uint32_t n = TLC;
     constexpr auto modulus = MODULUS;
     const uint32_t *const MOD = modulus.limbs;
+
+    uint32_t globalThreadId = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t globalStride = blockDim.x * gridDim.x;
+
+    const storage a_in = points[globalThreadId];
+    const storage b_in = points[globalThreadId + 1];
+    storage r_in = results[globalThreadId];
+
     const uint32_t *a = a_in.limbs;
     const uint32_t *b = b_in.limbs;
     uint32_t *even = r_in.limbs;
@@ -74,33 +97,33 @@ __global__ void montmul_raw_kernel(const storage &a_in, const storage &b_in, sto
       even[i] = ptx::addc_cc(even[i], odd[i + 1]);
     even[i] = ptx::addc(even[i], 0);
     // final reduction from [0, 2*mod) to [0, mod) not done here, instead performed optionally in mul_device wrapper
+
+    results[globalThreadId] = r_in;
   }
 
 
-void montmul_raw(const storage &a_host, const storage &b_host, storage &r_host) {
-    printf("montmul_raw\n");
-    
-    storage *a_device, *b_device, *r_device;
 
-    cudaMalloc(&a_device, sizeof(storage));
-    cudaMalloc(&b_device, sizeof(storage));
-    cudaMalloc(&r_device, sizeof(storage));
+void montmul_raw(const storage *points, storage *ret, uint32_t num_points) {
 
-    // Copy data from host to device
-    cudaMemcpy(a_device, &a_host, sizeof(storage), cudaMemcpyHostToDevice);
-    cudaMemcpy(b_device, &b_host, sizeof(storage), cudaMemcpyHostToDevice);
+    // print_device_properties();
+
+    // init memory
+    storage *pointsPtrGPU;
+    storage *retPtrGPU;
+
+    cudaMalloc(&pointsPtrGPU, sizeof(storage) * num_points);
+    cudaMalloc(&retPtrGPU, sizeof(storage) * num_points / 2);
+
+    cudaMemcpy(pointsPtrGPU, points, sizeof(storage) * num_points, cudaMemcpyHostToDevice);
 
     // Launch the kernel
-    montmul_raw_kernel<<<1, 32>>>(*a_device, *b_device, *r_device);
+    montmul_raw_kernel<<<1, 384>>>(pointsPtrGPU, retPtrGPU);
 
     // Wait for the GPU to finish
     cudaDeviceSynchronize();
 
     // Copy result back to host
-    cudaMemcpy(&r_host, r_device, sizeof(storage), cudaMemcpyDeviceToHost);
-
-    // Free device memory
-    cudaFree(a_device);
-    cudaFree(b_device);
-    cudaFree(r_device);
+    cudaMemcpy(ret, retPtrGPU, sizeof(storage) * num_points / 2, cudaMemcpyDeviceToHost);
 }
+
+

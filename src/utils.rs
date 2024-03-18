@@ -47,16 +47,34 @@ pub fn storage_to_biguint(storage: Storage) -> BigUint {
     BigUint::from_bytes_le(&bytes)
 }
 
-pub fn generate_points() -> (Storage, Storage) {
+pub fn generate_points(num_points: u32) -> Vec<Storage> {
+    
+    let mut points = Vec::new();
+    for _ in 0..num_points / 2 {
+        let (point1, point2) = generate_point_pair();
+        points.push(point1);
+        points.push(point2);
+    }
+
+    points
+}
+
+pub fn generate_point_pair() -> (Storage, Storage) {
     let mut rng = rand::thread_rng();
+    
     let number1 = generate_random_biguint(&mut rng, 381);
     let number2 = generate_random_biguint(&mut rng, 381);
 
-    println!("Number 1: {}", number1);
-    println!("Number 2: {}", number2);
+    // println!("Number 1: {}", number1);
+    // println!("Number 2: {}", number2);
 
     let storage1 = biguint_to_storage(number1);
     let storage2 = biguint_to_storage(number2);
 
     (storage1, storage2)
+}
+
+pub fn print_point(storage: Storage) {
+    let num = storage_to_biguint(storage);
+    println!("Point: {}", num.to_str_radix(16));
 }

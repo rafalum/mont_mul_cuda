@@ -7,7 +7,8 @@ use mont_mul_cuda::utils::*;
 fn criterion_benchmark(c: &mut Criterion) {
 
     // Sample two random G1 points in projective form and convert to affine
-    let (storage_a, storage_b) = generate_points();
+    let num_points = 16777216;
+    let points = generate_points(num_points);
 
     let mut group = c.benchmark_group("CUDA");
     group.sample_size(10);
@@ -19,7 +20,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     group.bench_function(&name, |b| {
         b.iter(|| {
             // Call the CUDA function with the prepared Storage inputs
-            let _result = montmul_raw_wrapper(&storage_a, &storage_b);
+            let _result = montmul_raw_wrapper(&points.as_slice(), num_points);
         })
     });
 

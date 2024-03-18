@@ -21,5 +21,5 @@ static constexpr uint32_t INV = 0xfffcfffd;
 typedef ff_storage<TLC> storage;
 
 extern "C" {
-  void montmul_raw(const storage &a, const storage &b, storage &r);
+  void montmul_raw(const storage *points, storage *ret, uint32_t num_points);
 }

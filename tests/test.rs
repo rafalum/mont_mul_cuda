@@ -4,9 +4,15 @@ use mont_mul_cuda::utils::*;
 
 #[test]
 fn test_montmul_raw() {
-    let (storage_a, storage_b) = generate_points();
+    let points = generate_points(2);
 
-    let storage_r = montmul_raw_wrapper(&storage_a, &storage_b);
+    for point in &points {
+        print_point(*point);
+    }
 
-    println!("Result: {}", storage_to_biguint(storage_r));
+    let storage_r: Vec<Storage> = montmul_raw_wrapper(&points.as_slice(), 2);
+
+    for point in &storage_r {
+        print_point(*point);
+    }
 }
