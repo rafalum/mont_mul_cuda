@@ -68,7 +68,7 @@ static DEVICE_INLINE void mad_n_redc(uint32_t *even, uint32_t *odd, const uint32
   }
 
 
-__global__ void montmul_raw_kernel(const storage *points, storage *results) {
+__global__ void montmul_raw_kernel(const storage *points, storage *results, uint32_t num_points) {
     constexpr uint32_t n = TLC;
     constexpr auto modulus = MODULUS;
     const uint32_t *const MOD = modulus.limbs;
@@ -76,32 +76,33 @@ __global__ void montmul_raw_kernel(const storage *points, storage *results) {
     uint32_t globalThreadId = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t globalStride = blockDim.x * gridDim.x;
 
-    const storage a_in = points[globalThreadId];
-    const storage b_in = points[globalThreadId + 1];
-    storage r_in = results[globalThreadId];
+    for (uint32_t j = globalThreadId; j < num_points; j += 2 * globalStride) {
 
-    const uint32_t *a = a_in.limbs;
-    const uint32_t *b = b_in.limbs;
-    uint32_t *even = r_in.limbs;
-    __align__(8) uint32_t odd[n + 1];
-    size_t i;
-#pragma unroll
-    for (i = 0; i < n; i += 2) {
-      mad_n_redc(&even[0], &odd[0], a, b[i], i == 0);
-      mad_n_redc(&odd[0], &even[0], a, b[i + 1]);
+      const storage a_in = points[j];
+      const storage b_in = points[j + 1];
+      storage r_in;
+      
+      const uint32_t *a = a_in.limbs;
+      const uint32_t *b = b_in.limbs;
+      uint32_t *even = r_in.limbs;
+      __align__(8) uint32_t odd[n + 1];
+      size_t i;
+  #pragma unroll
+      for (i = 0; i < n; i += 2) {
+        mad_n_redc(&even[0], &odd[0], a, b[i], i == 0);
+        mad_n_redc(&odd[0], &even[0], a, b[i + 1]);
+      }
+      // merge |even| and |odd|
+      even[0] = ptx::add_cc(even[0], odd[1]);
+  #pragma unroll
+      for (i = 1; i < n - 1; i++)
+        even[i] = ptx::addc_cc(even[i], odd[i + 1]);
+      even[i] = ptx::addc(even[i], 0);
+      // final reduction from [0, 2*mod) to [0, mod) not done here, instead performed optionally in mul_device wrapper
+
+      results[j / 2] = r_in;
     }
-    // merge |even| and |odd|
-    even[0] = ptx::add_cc(even[0], odd[1]);
-#pragma unroll
-    for (i = 1; i < n - 1; i++)
-      even[i] = ptx::addc_cc(even[i], odd[i + 1]);
-    even[i] = ptx::addc(even[i], 0);
-    // final reduction from [0, 2*mod) to [0, mod) not done here, instead performed optionally in mul_device wrapper
-
-    results[globalThreadId] = r_in;
   }
-
-
 
 void montmul_raw(const storage *points, storage *ret, uint32_t num_points) {
 
@@ -117,7 +118,7 @@ void montmul_raw(const storage *points, storage *ret, uint32_t num_points) {
     cudaMemcpy(pointsPtrGPU, points, sizeof(storage) * num_points, cudaMemcpyHostToDevice);
 
     // Launch the kernel
-    montmul_raw_kernel<<<1, 384>>>(pointsPtrGPU, retPtrGPU);
+    montmul_raw_kernel<<<40, 384>>>(pointsPtrGPU, retPtrGPU, num_points);
 
     // Wait for the GPU to finish
     cudaDeviceSynchronize();
