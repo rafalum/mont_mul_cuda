@@ -107,6 +107,7 @@ __global__ void montmul_raw_kernel(const storage *points, storage *results, uint
 void montmul_raw(const storage *points, storage *ret, uint32_t num_points) {
 
     // print_device_properties();
+    bool timing = true;
 
     // init memory
     storage *pointsPtrGPU;
@@ -117,11 +118,28 @@ void montmul_raw(const storage *points, storage *ret, uint32_t num_points) {
 
     cudaMemcpy(pointsPtrGPU, points, sizeof(storage) * num_points, cudaMemcpyHostToDevice);
 
+    cudaEvent_t start, stop;
+    float milliseconds = 0;
+    if (timing) {
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        cudaEventRecord(start);
+    }
+
     // Launch the kernel
     montmul_raw_kernel<<<40, 384>>>(pointsPtrGPU, retPtrGPU, num_points);
 
     // Wait for the GPU to finish
     cudaDeviceSynchronize();
+
+    if (timing) {
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        printf("Time: %f ms\n", milliseconds);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
 
     // Copy result back to host
     cudaMemcpy(ret, retPtrGPU, sizeof(storage) * num_points / 2, cudaMemcpyDeviceToHost);
