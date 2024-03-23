@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 
+#define N 2
+
 typedef union {
     double value;
     struct {
@@ -36,7 +38,7 @@ __global__ void fmaRzKernel(double a, double b, double c, double *result) {
 }
 
 
-void int_full_product(double a, double b, unsigned long *c_hi, unsigned long *c_lo) {
+void int_full_product(unsigned long *c_hi, unsigned long *c_lo, double a, double b) {
 
     /*
         Implementation of DPF Arithmetic: https://ieeexplore.ieee.org/document/8464792
@@ -45,11 +47,11 @@ void int_full_product(double a, double b, unsigned long *c_hi, unsigned long *c_
     double c1 = pow(2, 104);
     double c2 = pow(2, 104) + pow(2, 52);
 
-    printf("C1\n");
-    printDouble(c1);
+    // printf("C1\n");
+    // printDouble(c1);
 
-    printf("C2\n");
-    printDouble(c2);
+    // printf("C2\n");
+    // printDouble(c2);
 
     double p_hi;
     double *d_p_hi;
@@ -57,12 +59,12 @@ void int_full_product(double a, double b, unsigned long *c_hi, unsigned long *c_
     fmaRzKernel<<<1, 1>>>(a, b, c1, d_p_hi);
     cudaMemcpy(&p_hi, d_p_hi, sizeof(double), cudaMemcpyDeviceToHost);
     
-    printf("p_hi\n");
-    printDouble(p_hi);
+    // printf("p_hi\n");
+    // printDouble(p_hi);
 
     double sub = c2 - p_hi;
-    printf("Sub\n");
-    printDouble(sub);
+    // printf("Sub\n");
+    // printDouble(sub);
     
     double p_lo;
     double *d_p_lo;
@@ -70,8 +72,8 @@ void int_full_product(double a, double b, unsigned long *c_hi, unsigned long *c_
     fmaRzKernel<<<1, 1>>>(a, b, sub, d_p_lo);
     cudaMemcpy(&p_lo, d_p_lo, sizeof(double), cudaMemcpyDeviceToHost);
 
-    printf("p_lo\n");
-    printDouble(p_lo);
+    // printf("p_lo\n");
+    // printDouble(p_lo);
 
     double_breakdown c_hi_db = { .value = p_hi };
     double_breakdown c_lo_db = { .value = p_lo };
@@ -82,23 +84,35 @@ void int_full_product(double a, double b, unsigned long *c_hi, unsigned long *c_
     return;
 }
 
+void sampled_product(unsigned long *column_sums, double *a, double *b) {
+
+    unsigned long c_hi, c_lo;
+
+    for(int i = 0; i < N; i++) {
+        for(int j = 0; j < N; j++) {
+            int_full_product(&c_hi, &c_lo, a[i], b[j]);
+            column_sums[i + j] += c_lo;
+            column_sums[i + j + 1] += c_hi;
+        }
+    }
+
+    return;
+}
+
 int main() {
 
     // multiplicand 1
-    double a = 35184372088837;
-    printf("a\n");
-    printDouble(a);
+    double a[N] = {35184372088837, 1161084346041349};
 
     // multiplicand 2
-    double b = 549755813894;
-    printf("b\n");
-    printDouble(b);
+    double b[N] = {549755813894, 549755944966};
 
-    unsigned long res_hi, res_lo;
-    int_full_product(a, b, &res_hi, &res_lo);
+    unsigned long column_sums[2 * N];
+    sampled_product(column_sums, a, b);
 
-    printf("Product High: %lu\n", res_hi);
-    printf("Product Low: %lu\n", res_lo);
+    for(int i = 0; i < 2 * N; i++) {
+        printf("Column sum %d: %lu\n", i, column_sums[i]);
+    }
     
     return 0;
 }
