@@ -68,7 +68,7 @@ static DEVICE_INLINE void mad_n_redc(uint32_t *even, uint32_t *odd, const uint32
   }
 
 
-__global__ void montmul_raw_kernel(const storage *points, storage *results, uint32_t num_points) {
+__global__ void montmul_raw_kernel(storage *results, const storage *points, uint32_t num_points) {
     constexpr uint32_t n = TLC;
     constexpr auto modulus = MODULUS;
     const uint32_t *const MOD = modulus.limbs;
@@ -104,7 +104,7 @@ __global__ void montmul_raw_kernel(const storage *points, storage *results, uint
     }
   }
 
-void montmul_raw(const storage *points, storage *ret, uint32_t num_points) {
+void montmul_raw(storage *ret, const storage *points, uint32_t num_points) {
 
     // print_device_properties();
     bool timing = true;
@@ -127,7 +127,7 @@ void montmul_raw(const storage *points, storage *ret, uint32_t num_points) {
     }
 
     // Launch the kernel
-    montmul_raw_kernel<<<40, 384>>>(pointsPtrGPU, retPtrGPU, num_points);
+    montmul_raw_kernel<<<40, 384>>>(retPtrGPU, pointsPtrGPU, num_points);
 
     // Wait for the GPU to finish
     cudaDeviceSynchronize();

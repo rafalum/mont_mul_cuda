@@ -10,7 +10,7 @@ pub struct Storage {
 
 #[cfg_attr(feature = "quiet", allow(improper_ctypes), allow(dead_code))]
 extern "C" {
-    fn montmul_raw(points: *const Storage, ret: *mut Storage, num_points: u32);
+    fn montmul_raw(ret: *mut Storage, points: *const Storage, num_points: u32);
 }
 
 pub fn montmul_raw_wrapper(points: &[Storage], num_points: u32) -> Vec<Storage> {
@@ -21,7 +21,7 @@ pub fn montmul_raw_wrapper(points: &[Storage], num_points: u32) -> Vec<Storage> 
     // Assume proper CUDA initialization and memory management done here...
     unsafe {
         // Launch the kernel with appropriate configuration
-        montmul_raw(points.as_ptr() as *const _, results.as_mut_ptr() as *mut _, num_points);
+        montmul_raw(results.as_mut_ptr() as *mut _, points.as_ptr() as *const _, num_points);
     }
     results
 }
