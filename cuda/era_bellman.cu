@@ -76,14 +76,12 @@ __global__ void montmul_raw_kernel(storage *results, const storage *points, uint
     uint32_t globalThreadId = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t globalStride = blockDim.x * gridDim.x;
 
-    for (uint32_t j = globalThreadId; j < num_points; j += 2 * globalStride) {
+    for (uint32_t j = 2 * globalThreadId; j < num_points; j += 2 * globalStride) {
 
-      const storage a_in = points[j];
-      const storage b_in = points[j + 1];
       storage r_in;
       
-      const uint32_t *a = a_in.limbs;
-      const uint32_t *b = b_in.limbs;
+      const uint32_t *a = points[j].limbs;
+      const uint32_t *b = points[j+1].limbs;
       uint32_t *even = r_in.limbs;
       __align__(8) uint32_t odd[n + 1];
       size_t i;
