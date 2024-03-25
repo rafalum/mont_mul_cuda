@@ -18,6 +18,51 @@ void print_device_properties(){
   printf("Max threads per warp: %d\n", properties.warpSize);
 }
 
+template <unsigned OPS_COUNT = UINT32_MAX, bool CARRY_IN = false, bool CARRY_OUT = false> struct carry_chain {
+  unsigned index;
+
+  constexpr __host__ __device__ __forceinline__ carry_chain() : index(0) {}
+
+  __device__ __forceinline__ uint32_t add(const uint32_t x, const uint32_t y) {
+    index++;
+    if (index == 1 && OPS_COUNT == 1 && !CARRY_IN && !CARRY_OUT)
+      return ptx::add(x, y);
+    else if (index == 1 && !CARRY_IN)
+      return ptx::add_cc(x, y);
+    else if (index < OPS_COUNT || CARRY_OUT)
+      return ptx::addc_cc(x, y);
+    else
+      return ptx::addc(x, y);
+  }
+
+
+  __device__ __forceinline__ uint32_t sub(const uint32_t x, const uint32_t y) {
+    index++;
+    if (index == 1 && OPS_COUNT == 1 && !CARRY_IN && !CARRY_OUT)
+      return ptx::sub(x, y);
+    else if (index == 1 && !CARRY_IN)
+      return ptx::sub_cc(x, y);
+    else if (index < OPS_COUNT || CARRY_OUT)
+      return ptx::subc_cc(x, y);
+    else
+      return ptx::subc(x, y);
+  }
+
+};
+
+template <bool SUBTRACT, bool CARRY_OUT> static constexpr DEVICE_INLINE uint32_t add_sub_limbs_device(const storage &xs, const storage &ys, storage &rs) {
+    const uint32_t *x = xs.limbs;
+    const uint32_t *y = ys.limbs;
+    uint32_t *r = rs.limbs;
+    carry_chain<CARRY_OUT ? TLC + 1 : TLC> chain;
+#pragma unroll
+    for (unsigned i = 0; i < TLC; i++)
+      r[i] = SUBTRACT ? chain.sub(x[i], y[i]) : chain.add(x[i], y[i]);
+    if (!CARRY_OUT)
+      return 0;
+    return SUBTRACT ? chain.sub(0, 0) : chain.add(0, 0);
+  }
+
 static __device__ __forceinline__ void mul_n(uint32_t *acc, const uint32_t *a, uint32_t bi, size_t n = TLC) { 
 #pragma unroll
     for (size_t i = 0; i < n; i += 2) {
@@ -70,18 +115,19 @@ static DEVICE_INLINE void mad_n_redc(uint32_t *even, uint32_t *odd, const uint32
 
 __global__ void montmul_raw_kernel(storage *results, const storage *points, uint32_t num_points) {
     constexpr uint32_t n = TLC;
-    constexpr auto modulus = MODULUS;
-    const uint32_t *const MOD = modulus.limbs;
+
+    const storage modulus = MODULUS;
 
     uint32_t globalThreadId = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t globalStride = blockDim.x * gridDim.x;
 
     for (uint32_t j = 2 * globalThreadId; j < num_points; j += 2 * globalStride) {
-
-      storage r_in;
       
       const uint32_t *a = points[j].limbs;
-      const uint32_t *b = points[j+1].limbs;
+      const uint32_t *b = points[j + 1].limbs;
+
+      storage r_in;
+
       uint32_t *even = r_in.limbs;
       __align__(8) uint32_t odd[n + 1];
       size_t i;
@@ -96,9 +142,12 @@ __global__ void montmul_raw_kernel(storage *results, const storage *points, uint
       for (i = 1; i < n - 1; i++)
         even[i] = ptx::addc_cc(even[i], odd[i + 1]);
       even[i] = ptx::addc(even[i], 0);
-      // final reduction from [0, 2*mod) to [0, mod) not done here, instead performed optionally in mul_device wrapper
 
-      results[j / 2] = r_in;
+      storage rs;
+      add_sub_limbs_device<true, true>(r_in, modulus, rs);
+
+      results[j / 2] = rs;
+
     }
   }
 
@@ -125,7 +174,7 @@ void montmul_raw(storage *ret, const storage *points, uint32_t num_points) {
     }
 
     // Launch the kernel
-    montmul_raw_kernel<<<40, 384>>>(retPtrGPU, pointsPtrGPU, num_points);
+    montmul_raw_kernel<<<1, 32>>>(retPtrGPU, pointsPtrGPU, num_points);
 
     // Wait for the GPU to finish
     cudaDeviceSynchronize();
@@ -143,4 +192,19 @@ void montmul_raw(storage *ret, const storage *points, uint32_t num_points) {
     cudaMemcpy(ret, retPtrGPU, sizeof(storage) * num_points / 2, cudaMemcpyDeviceToHost);
 }
 
+int main() {
+	// Sample random points
+	storage points[2];
+	points[0] = {2434398911, 1341486800, 2149629466, 760351369, 865586749, 302494279, 3012983145, 950309675, 3687163001, 311611070, 4166041132, 3633413113};
+	points[1] = {1366576235, 909555713, 1431863607, 3937335020, 3339380049, 2503284124, 1569754050, 610316959, 2201712813, 2217731649, 322256437, 2053650267};
+	
+	storage result[1];
 
+	montmul_raw(result, points, 2);
+
+	printf("Result: %u\n", result[0].limbs[0]);
+  printf("Result: %u\n", result[0].limbs[11]);
+
+	return 0;
+
+}
