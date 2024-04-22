@@ -1,16 +1,26 @@
 # Accelerating Montgomery Multiplication
 
 ## Perfomance
-Adding 20M points
+Multiplying 20M points
+
+### Supra
+- 40 SM/32 Thread: 65.37 ms
+- 40 SM/128 Thread: 16.68 ms
+- 40 SM/384 Thread: 7.60 ms
+- 40 SM/512 Thread: 6.82 ms
+- 40 SM/768 Thread: 6.71 ms
+
+--> ~ 1.5 Billion Operations per second
+
 
 ### Era-Bellmann
-- 1 SM/1 Thread: 16538.007812 ms
-- 1 SM/40 Thread: 456.193115 ms
-- 40 SM/1 Thread: 422.151672 ms
-- 40 SM/40 Thread: 11.800256 ms
-- 40 SM/384 Thread: 4.506816 ms
+- 40 SM/32 Thread: 23.38 ms
+- 40 SM/128 Thread: 8.33 ms
+- 40 SM/384 Thread: 4.59 ms
+- 40 SM/512 Thread: 4.38 ms
+- 40 SM/768 Thread: 4.98 ms
 
---> ~ 3 Billion Operations per second
+--> ~ 2.3 Billion Operations per second
 
 
 ## Refs
