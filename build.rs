@@ -55,6 +55,7 @@ fn main() {
         cc.define(def, None);
     }
     cc.files(&files).compile("era_bellman");
+    //cc.files(&files).compile("supra");
 
     if cfg!(target_os = "windows") && !cfg!(target_env = "msvc") {
         return;
@@ -73,6 +74,7 @@ fn main() {
             nvcc.define(def, None);
         }
         nvcc.file("cuda/era_bellman.cu").compile("era_bellman");
+        //nvcc.file("cuda/supra.cu").compile("supra");
 
         println!("cargo:rustc-cfg=feature=\"cuda\"");
         println!("cargo:rerun-if-changed=cuda");
