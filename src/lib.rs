@@ -11,6 +11,8 @@ pub struct Storage {
 #[cfg_attr(feature = "quiet", allow(improper_ctypes), allow(dead_code))]
 extern "C" {
     fn montmul_raw(ret: *mut Storage, points: *const Storage, num_points: u32);
+
+    fn montmul_supra(ret: *mut Storage, points: *const Storage, num_points: u32);
 }
 
 pub fn montmul_raw_wrapper(points: &[Storage], num_points: u32) -> Vec<Storage> {
@@ -22,6 +24,19 @@ pub fn montmul_raw_wrapper(points: &[Storage], num_points: u32) -> Vec<Storage> 
     unsafe {
         // Launch the kernel with appropriate configuration
         montmul_raw(results.as_mut_ptr() as *mut _, points.as_ptr() as *const _, num_points);
+    }
+    results
+}
+
+pub fn montmul_supra_wrapper(points: &[Storage], num_points: u32) -> Vec<Storage> {
+
+    // Init vector of size num_points
+    let mut results: Vec<Storage> = vec![Storage { limbs: [0; 12] }; (num_points / 2) as usize];
+
+    // Assume proper CUDA initialization and memory management done here...
+    unsafe {
+        // Launch the kernel with appropriate configuration
+        montmul_supra(results.as_mut_ptr() as *mut _, points.as_ptr() as *const _, num_points);
     }
     results
 }
