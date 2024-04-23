@@ -1,7 +1,7 @@
 #include "float.h"
 
 /*
-        Adaptation of: https://ieeexplore.ieee.org/abstract/document/9139772
+        Adaptation of: https://ieeexplore.ieee.org/abstract/document/9139772 and https://github.com/supranational/blst
 */
 
 
@@ -113,13 +113,7 @@ __global__ void multi_precision_multiplication(unsigned long *c, double *a, doub
     return;
 }
 
-__global__ void montmul_float_kernel(unsigned long *c, double *a, double *b) {
-
-    double c1 = pow(2, 104);
-    double c2 = pow(2, 104) + pow(2, 52);
-
-    const double *modulus = MODU.limbs;
-    const uint64_t inv = INV_D;
+static __device__ void montmul_float(unsigned long *c, double* a, double* b, const double c1, const double c2, const uint64_t inv, const double *modulus) {
 
     double bi = b[0];
     for(int j = 0; j < N; j++) {
@@ -154,11 +148,6 @@ __global__ void montmul_float_kernel(unsigned long *c, double *a, double *b) {
         }
         c[N] = c[N] >> 52;
 
-        for(int k = 0; k < N + 1; k++) {
-			printf("%u, ", c[k]);
-		}
-		printf("\n");
-
         if(++i == N ){
             break;
         }
@@ -177,71 +166,100 @@ __global__ void montmul_float_kernel(unsigned long *c, double *a, double *b) {
         qi = (c[0] * inv) & 0xfffffffffffffull;
 
     }
-
-
 }
 
+__global__ void montmul_float_kernel(storage8 *results, dpf_storage *points, uint32_t num_points) {
 
-void montmul_float(storage *ret, const dpf_storage *points, uint32_t num_points) {
+    const double c1 = pow(2, 104);
+    const double c2 = pow(2, 104) + pow(2, 52);
 
-    // init memory
-    unsigned long *c_d;
+    const double *modulus = MODU.limbs;
+    const uint64_t inv = INV_D;
 
-    unsigned long c_h[N + 1];
+    uint32_t globalThreadId = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t globalStride = blockDim.x * gridDim.x;
 
-    double *a_d;
-    double *b_d;
+    for (uint32_t j = 2 * globalThreadId; j < num_points; j += 2 * globalStride) {
+        storage8 r_in;
 
-    const double *a_h = points[0].limbs;
-    const double *b_h = points[1].limbs;
+        montmul_float((unsigned long*) r_in.limbs, (double*) points[j].limbs, (double*) points[j + 1].limbs, c1, c2, inv, modulus);
 
-    cudaMalloc(&c_d, sizeof(unsigned long) * (N + 1));
-
-    cudaMalloc(&a_d, sizeof(double) * N);
-    cudaMalloc(&b_d, sizeof(double) * N);
-
-    cudaMemcpy(a_d, a_h, sizeof(double) * N, cudaMemcpyHostToDevice);
-    cudaMemcpy(b_d, b_h, sizeof(double) * N, cudaMemcpyHostToDevice);
-
-
-    // Launch the kernel
-    montmul_float_kernel<<<1, 1>>>(c_d, a_d, b_d);
-
-    // Wait for the GPU to finish
-    cudaDeviceSynchronize();
-
-    printf("Kernel finished\n");
-
-    // Copy result back to host
-    cudaMemcpy(c_h, c_d, sizeof(unsigned long) * (N + 1), cudaMemcpyDeviceToHost);
-
-    for(int i = 0; i < N; i++) {
-        printf("%lu\n", c_h[i]);
+        results[j / 2] = r_in;
     }
 
 }
 
 
+void montmul_float(storage8 *ret, const dpf_storage *points, uint32_t num_points) {
+
+    // print_device_properties();
+    bool timing = false;
+
+    // init memory
+    dpf_storage *pointsPtrGPU;
+    storage8 *retPtrGPU;
+
+    cudaMalloc(&pointsPtrGPU, sizeof(dpf_storage) * num_points);
+    cudaMalloc(&retPtrGPU, sizeof(storage8) * (num_points / 2));
+
+    cudaMemcpy(pointsPtrGPU, points, sizeof(dpf_storage) * num_points, cudaMemcpyHostToDevice);
+
+    cudaEvent_t start, stop;
+    float milliseconds = 0;
+    if (timing) {
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        cudaEventRecord(start);
+    }
+
+    // Launch the kernel
+    montmul_float_kernel<<<40, 768>>>(retPtrGPU, pointsPtrGPU, num_points);
+
+    // Wait for the GPU to finish
+    cudaDeviceSynchronize();
+
+    if (timing) {
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        printf("Time: %f ms\n", milliseconds);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
+
+    printf("Kernel finished\n");
+
+    // Copy result back to host
+    cudaMemcpy(ret, retPtrGPU, sizeof(storage8) * (num_points / 2), cudaMemcpyDeviceToHost);
+
+}
+
 
 int main() {
 
     // Sample random points
+    int num_points = 20000000;
+
 	storage points[2];
+    dpf_storage *points_dpf = (dpf_storage*) malloc(num_points * sizeof(dpf_storage));
+    
 	points[0] = {2434398911, 1341486800, 2149629466, 760351369, 865586749, 302494279, 3012983145, 950309675, 3687163001, 311611070, 4166041132, 3633413113};
 	points[1] = {1366576235, 909555713, 1431863607, 3937335020, 3339380049, 2503284124, 1569754050, 610316959, 2201712813, 2217731649, 322256437, 2053650267};
+    
+    for(int i = 0; i < num_points; i+=2) {
+        uint_storage_to_dpf_storage(&points_dpf[i], &points[0]);
+        uint_storage_to_dpf_storage(&points_dpf[i+1], &points[1]);
+    }
 
-    dpf_storage points_dpf[2];
+    storage8 *result = (storage8*) malloc(num_points / 2 * sizeof(storage8));
 
-    uint_storage_to_dpf_storage(&points_dpf[0], &points[0]);
-    uint_storage_to_dpf_storage(&points_dpf[1], &points[1]);
+    montmul_float(result, points_dpf, num_points);
 
+    for(int i = 0; i < N; i++) {
+        printf("%lu\n", result[0].limbs[i]);
+    }
 
-
-    storage result[1];
-
-    montmul_float(result, points_dpf, 2);
 	
-
 	return 0;
 
 }
