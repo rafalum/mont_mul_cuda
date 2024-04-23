@@ -3,6 +3,13 @@
 ## Perfomance
 Multiplying 20M points
 
+### Float
+- 40 SM/32 Thread: 132.95 ms
+- 40 SM/128 Thread: 71.47 ms
+- 40 SM/384 Thread: 71.08 ms
+- 40 SM/512 Thread: 71.10 ms
+- 40 SM/768 Thread: 71.13 ms
+
 ### Supra
 - 40 SM/32 Thread: 65.37 ms
 - 40 SM/128 Thread: 16.68 ms
