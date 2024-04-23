@@ -112,46 +112,48 @@ static DEVICE_INLINE void mad_n_redc(uint32_t *even, uint32_t *odd, const uint32
     odd[n - 1] = ptx::addc(odd[n - 1], 0);
   }
 
+static DEVICE_INLINE void montmul_era(storage *ret, const uint32_t *a, const uint32_t *b) {
 
-__global__ void montmul_raw_kernel(storage *results, const storage *points, uint32_t num_points) {
-    constexpr uint32_t n = TLC;
+  const storage modulus = MODULUS;
 
-    const storage modulus = MODULUS;
+  uint32_t *even = ret->limbs;
+  __align__(8) uint32_t odd[TLC + 1];
+  size_t i;
+  #pragma unroll
+  for (i = 0; i < TLC; i += 2) {
+    mad_n_redc(&even[0], &odd[0], a, b[i], i == 0);
+    mad_n_redc(&odd[0], &even[0], a, b[i + 1]);
+  }
+  // merge |even| and |odd|
+  even[0] = ptx::add_cc(even[0], odd[1]);
+  #pragma unroll
+  for (i = 1; i < TLC - 1; i++)
+    even[i] = ptx::addc_cc(even[i], odd[i + 1]);
+  even[i] = ptx::addc(even[i], 0);
+
+  storage rs;
+  add_sub_limbs_device<true, true>(*ret, modulus, rs);
+}
+
+
+__global__ void montmul_era_kernel(storage *results, const storage *points, uint32_t num_points) {
+
 
     uint32_t globalThreadId = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t globalStride = blockDim.x * gridDim.x;
 
     for (uint32_t j = 2 * globalThreadId; j < num_points; j += 2 * globalStride) {
       
-      const uint32_t *a = points[j].limbs;
-      const uint32_t *b = points[j + 1].limbs;
-
       storage r_in;
 
-      uint32_t *even = r_in.limbs;
-      __align__(8) uint32_t odd[n + 1];
-      size_t i;
-  #pragma unroll
-      for (i = 0; i < n; i += 2) {
-        mad_n_redc(&even[0], &odd[0], a, b[i], i == 0);
-        mad_n_redc(&odd[0], &even[0], a, b[i + 1]);
-      }
-      // merge |even| and |odd|
-      even[0] = ptx::add_cc(even[0], odd[1]);
-  #pragma unroll
-      for (i = 1; i < n - 1; i++)
-        even[i] = ptx::addc_cc(even[i], odd[i + 1]);
-      even[i] = ptx::addc(even[i], 0);
+      montmul_era(&r_in, points[j].limbs, points[j + 1].limbs);
 
-      storage rs;
-      add_sub_limbs_device<true, true>(r_in, modulus, rs);
-
-      results[j / 2] = rs;
+      results[j / 2] = r_in;
 
     }
   }
 
-void montmul_raw(storage *ret, const storage *points, uint32_t num_points) {
+void montmul_era(storage *ret, const storage *points, uint32_t num_points) {
 
     // print_device_properties();
     bool timing = true;
@@ -174,7 +176,7 @@ void montmul_raw(storage *ret, const storage *points, uint32_t num_points) {
     }
 
     // Launch the kernel
-    montmul_raw_kernel<<<1, 32>>>(retPtrGPU, pointsPtrGPU, num_points);
+    montmul_era_kernel<<<40, 384>>>(retPtrGPU, pointsPtrGPU, num_points);
 
     // Wait for the GPU to finish
     cudaDeviceSynchronize();
@@ -194,17 +196,26 @@ void montmul_raw(storage *ret, const storage *points, uint32_t num_points) {
 
 int main() {
 	// Sample random points
-	storage points[2];
+  int num_points = 20000000;
+	storage* points = (storage*)malloc(num_points * sizeof(storage));
+
 	points[0] = {2434398911, 1341486800, 2149629466, 760351369, 865586749, 302494279, 3012983145, 950309675, 3687163001, 311611070, 4166041132, 3633413113};
 	points[1] = {1366576235, 909555713, 1431863607, 3937335020, 3339380049, 2503284124, 1569754050, 610316959, 2201712813, 2217731649, 322256437, 2053650267};
 	
-	storage result[1];
+	storage* result = (storage*)malloc(num_points / 2 * sizeof(storage));
 
-	montmul_raw(result, points, 2);
+  for (int i = 2; i < num_points; i+=2) {
+    points[i] = points[0];
+    points[i + 1] = points[1];
+  }
 
-	printf("Result: %u\n", result[0].limbs[0]);
-  printf("Result: %u\n", result[0].limbs[11]);
+	montmul_era(result, points, num_points);
+
+	for(int i = 0; i < 12; i++) {
+    printf("%u\n", result[0].limbs[i]);
+  }
 
 	return 0;
 
 }
+
