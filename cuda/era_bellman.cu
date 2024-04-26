@@ -3,21 +3,6 @@
 
 #define CUDA_CHECK(call) if((errorState=call)!=0) { cudaError("Call \"" #call "\" failed.", __FILE__, __LINE__); return errorState; }
 
-void print_device_properties(){
-  cudaDeviceProp properties;
-  cudaGetDeviceProperties(&properties, 0);
-
-  printf("SM count: %d\n", properties.multiProcessorCount);
-  printf("Max blocks per SM: %d\n", properties.maxBlocksPerMultiProcessor);
-  printf("Max threads per block: %d\n", properties.maxThreadsPerBlock);
-  printf("Max threads per SM: %d\n", properties.maxThreadsPerMultiProcessor);
-  printf("Max shared memory per block: %zu\n", properties.sharedMemPerBlock);
-  printf("Max shared memory per SM: %zu\n", properties.sharedMemPerMultiprocessor);
-  printf("Max registers per block: %d\n", properties.regsPerBlock);
-  printf("Max registers per SM: %d\n", properties.regsPerMultiprocessor);
-  printf("Max threads per warp: %d\n", properties.warpSize);
-}
-
 template <unsigned OPS_COUNT = UINT32_MAX, bool CARRY_IN = false, bool CARRY_OUT = false> struct carry_chain {
   unsigned index;
 
@@ -50,10 +35,10 @@ template <unsigned OPS_COUNT = UINT32_MAX, bool CARRY_IN = false, bool CARRY_OUT
 
 };
 
-template <bool SUBTRACT, bool CARRY_OUT> static constexpr DEVICE_INLINE uint32_t add_sub_limbs_device(const storage &xs, const storage &ys, storage &rs) {
-    const uint32_t *x = xs.limbs;
-    const uint32_t *y = ys.limbs;
-    uint32_t *r = rs.limbs;
+template <bool SUBTRACT, bool CARRY_OUT> static constexpr DEVICE_INLINE uint32_t add_sub_limbs_device(storage *rs, const storage *xs, const storage *ys) {
+    const uint32_t *x = xs->limbs;
+    const uint32_t *y = ys->limbs;
+    uint32_t *r = rs->limbs;
     carry_chain<CARRY_OUT ? TLC + 1 : TLC> chain;
 #pragma unroll
     for (unsigned i = 0; i < TLC; i++)
@@ -63,7 +48,7 @@ template <bool SUBTRACT, bool CARRY_OUT> static constexpr DEVICE_INLINE uint32_t
     return SUBTRACT ? chain.sub(0, 0) : chain.add(0, 0);
   }
 
-static __device__ __forceinline__ void mul_n(uint32_t *acc, const uint32_t *a, uint32_t bi, size_t n = TLC) { 
+static DEVICE_INLINE void mul_n(uint32_t *acc, const uint32_t *a, uint32_t bi, size_t n = TLC) { 
 #pragma unroll
     for (size_t i = 0; i < n; i += 2) {
       acc[i] = ptx::mul_lo(a[i], bi);
@@ -112,27 +97,28 @@ static DEVICE_INLINE void mad_n_redc(uint32_t *even, uint32_t *odd, const uint32
     odd[n - 1] = ptx::addc(odd[n - 1], 0);
   }
 
-static DEVICE_INLINE void montmul_era(storage *ret, const uint32_t *a, const uint32_t *b) {
+static DEVICE_INLINE storage montmul_era(const uint32_t *a, const uint32_t *b) {
 
-  const storage modulus = MODULUS;
+	storage ret;
+    const storage modulus = MODULUS;
 
-  uint32_t *even = ret->limbs;
-  __align__(8) uint32_t odd[TLC + 1];
-  size_t i;
-  #pragma unroll
-  for (i = 0; i < TLC; i += 2) {
-    mad_n_redc(&even[0], &odd[0], a, b[i], i == 0);
-    mad_n_redc(&odd[0], &even[0], a, b[i + 1]);
-  }
-  // merge |even| and |odd|
-  even[0] = ptx::add_cc(even[0], odd[1]);
-  #pragma unroll
-  for (i = 1; i < TLC - 1; i++)
-    even[i] = ptx::addc_cc(even[i], odd[i + 1]);
-  even[i] = ptx::addc(even[i], 0);
+	uint32_t *even = ret.limbs;
+	__align__(8) uint32_t odd[TLC + 1];
+	size_t i;
+	#pragma unroll
+	for (i = 0; i < TLC; i += 2) {
+		mad_n_redc(&even[0], &odd[0], a, b[i], i == 0);
+		mad_n_redc(&odd[0], &even[0], a, b[i + 1]);
+	}
+	// merge |even| and |odd|
+	even[0] = ptx::add_cc(even[0], odd[1]);
+	#pragma unroll
+	for (i = 1; i < TLC - 1; i++)
+		even[i] = ptx::addc_cc(even[i], odd[i + 1]);
+	even[i] = ptx::addc(even[i], 0);
 
-  storage rs;
-  add_sub_limbs_device<true, true>(*ret, modulus, rs);
+  	add_sub_limbs_device<true, true>(&ret, &ret, &modulus);
+	return ret;
 }
 
 
@@ -144,19 +130,15 @@ __global__ void montmul_era_kernel(storage *results, const storage *points, uint
 
     for (uint32_t j = 2 * globalThreadId; j < num_points; j += 2 * globalStride) {
       
-      storage r_in;
-
-      montmul_era(&r_in, points[j].limbs, points[j + 1].limbs);
-
-      results[j / 2] = r_in;
+      results[j / 2] = montmul_era(points[j].limbs, points[j + 1].limbs);
 
     }
-  }
+}
 
 void montmul_era(storage *ret, const storage *points, uint32_t num_points) {
 
     // print_device_properties();
-    bool timing = true;
+    bool timing = false;
 
     // init memory
     storage *pointsPtrGPU;
@@ -176,7 +158,7 @@ void montmul_era(storage *ret, const storage *points, uint32_t num_points) {
     }
 
     // Launch the kernel
-    montmul_era_kernel<<<40, 384>>>(retPtrGPU, pointsPtrGPU, num_points);
+    montmul_era_kernel<<<1024, 64>>>(retPtrGPU, pointsPtrGPU, num_points);
 
     // Wait for the GPU to finish
     cudaDeviceSynchronize();
@@ -194,26 +176,100 @@ void montmul_era(storage *ret, const storage *points, uint32_t num_points) {
     cudaMemcpy(ret, retPtrGPU, sizeof(storage) * num_points / 2, cudaMemcpyDeviceToHost);
 }
 
+
+
+void montmul_era_piped(storage *ret, const storage *points, uint32_t num_points) {
+
+    cudaFree(0);
+    cudaFree(0);
+
+    cudaStream_t memoryStreamHostToDevice, memoryStreamDeviceToHost, runStream;
+    cudaStreamCreate(&memoryStreamHostToDevice);
+    cudaStreamCreate(&memoryStreamDeviceToHost);
+    cudaStreamCreate(&runStream);
+
+    // print_device_properties();
+
+    // init memory
+    storage *pointsRegionA, *pointsRegionB;
+    storage *resultRegionA, *resultRegionB;
+
+    cudaMalloc(&pointsRegionA, sizeof(storage) * num_points);
+    cudaMalloc(&pointsRegionB, sizeof(storage) * num_points);
+    cudaMalloc(&resultRegionA, sizeof(storage) * (num_points / 2));
+    cudaMalloc(&resultRegionB, sizeof(storage) * (num_points / 2));
+
+    printf("Allocated memory\n");
+
+    // Initial configuration
+    cudaMemcpy(resultRegionA, points, sizeof(storage) * (num_points / 2), cudaMemcpyHostToDevice);
+    cudaMemcpy(pointsRegionB, points, sizeof(storage) * num_points, cudaMemcpyHostToDevice);
+
+    for (int i = 0; i < 2; i++) {
+
+        if(i % 2 == 0) {
+            cudaMemcpyAsync(pointsRegionA, points, sizeof(storage) * num_points, cudaMemcpyHostToDevice, memoryStreamHostToDevice);
+            montmul_era_kernel<<<1024, 64, 0, runStream>>>(resultRegionB, pointsRegionB, num_points);
+            cudaMemcpyAsync(ret, resultRegionA, sizeof(storage) * (num_points / 2), cudaMemcpyDeviceToHost, memoryStreamDeviceToHost);
+        } else {
+            cudaMemcpyAsync(pointsRegionB, points, sizeof(storage) * num_points, cudaMemcpyHostToDevice, memoryStreamHostToDevice);
+            montmul_era_kernel<<<1024, 64, 0, runStream>>>(resultRegionA, pointsRegionA, num_points);
+            cudaMemcpyAsync(ret, resultRegionB, sizeof(storage) * (num_points / 2), cudaMemcpyDeviceToHost, memoryStreamDeviceToHost);
+        }
+
+        // Wait for the GPU to finish
+        cudaStreamSynchronize(memoryStreamHostToDevice); 
+        cudaStreamSynchronize(runStream);
+        cudaStreamSynchronize(memoryStreamDeviceToHost);
+
+        // Copy result back to host
+        //cudaMemcpy(ret, retPtrGPU, sizeof(storage) * (num_points / 2), cudaMemcpyDeviceToHost);
+
+    }
+
+    // Destroy streams
+    cudaStreamDestroy(memoryStreamDeviceToHost);
+    cudaStreamDestroy(memoryStreamHostToDevice);
+    cudaStreamDestroy(runStream);
+
+    printf("Destroyed streams\n");
+
+    // Free memory 
+    cudaFree(pointsRegionA);
+    cudaFree(pointsRegionB);
+    cudaFree(resultRegionA);
+    cudaFree(resultRegionB);
+}
+
 int main() {
 	// Sample random points
-  int num_points = 20000000;
-	storage* points = (storage*)malloc(num_points * sizeof(storage));
+    int num_points = 1024 * 64;
 
-	points[0] = {2434398911, 1341486800, 2149629466, 760351369, 865586749, 302494279, 3012983145, 950309675, 3687163001, 311611070, 4166041132, 3633413113};
+    // Allocate page-locked memory for points
+	storage* points;
+    cudaHostAlloc(&points, num_points * sizeof(storage), cudaHostAllocDefault);
+
+    // Allocate page-locked memory for results
+	storage* results;
+    cudaHostAlloc(&results, (num_points / 2) * sizeof(storage), cudaHostAllocDefault);
+
+    points[0] = {2434398911, 1341486800, 2149629466, 760351369, 865586749, 302494279, 3012983145, 950309675, 3687163001, 311611070, 4166041132, 3633413113};
 	points[1] = {1366576235, 909555713, 1431863607, 3937335020, 3339380049, 2503284124, 1569754050, 610316959, 2201712813, 2217731649, 322256437, 2053650267};
-	
-	storage* result = (storage*)malloc(num_points / 2 * sizeof(storage));
 
-  for (int i = 2; i < num_points; i+=2) {
-    points[i] = points[0];
-    points[i + 1] = points[1];
-  }
+    for (int i = 2; i < num_points; i+=2) {
+        points[i] = points[0];
+        points[i + 1] = points[1];
+    }
 
-	montmul_era(result, points, num_points);
+	montmul_era_piped(results, points, num_points);
 
 	for(int i = 0; i < 12; i++) {
-    printf("%u\n", result[0].limbs[i]);
-  }
+        printf("%u\n", results[0].limbs[i]);
+    }
+
+    // Free allocated memory
+    cudaFreeHost(points);
+    cudaFreeHost(results);
 
 	return 0;
 
